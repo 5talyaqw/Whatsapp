@@ -1,11 +1,10 @@
 #pragma once
-#include <vector>
-#include <thread>
+
 #include <WinSock2.h>
 #include <Windows.h>
-#include <map>
-#include "MessageQueue.h"
+#include <unordered_map>
 #include "Helper.h"
+
 
 
 class Server
@@ -19,12 +18,6 @@ private:
 
 	void acceptClient();
 	void clientHandler(SOCKET clientSocket);
-	void messageProcessor(); // New function for handling messages
-
+	std::unordered_map<std::string, int> users;
 	SOCKET _serverSocket;
-	std::vector<std::thread> _clientThreads; //storing the client threads
-	std::map<SOCKET, std::string> _clients;
-	std::mutex _clientsMutex;
-	MessageQueue _messageQueue;
-	std::thread _messageThread;
 };

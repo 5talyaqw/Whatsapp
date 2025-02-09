@@ -3,6 +3,17 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <queue>
+#include <condition_variable>
+#include <mutex>
+
+
+
+//global variables
+std::queue<std::string> messageQueue;
+std::mutex queueMutex;
+std::condition_variable queueCV;
+
 
 
 Server::Server()
@@ -14,9 +25,6 @@ Server::Server()
 
 	if (_serverSocket == INVALID_SOCKET)
 		throw std::exception(__FUNCTION__ " - socket");
-
-	// Start the message processing thread
-	_messageThread = std::thread(&Server::messageProcessor, this);
 }
 
 Server::~Server()
@@ -27,19 +35,13 @@ Server::~Server()
 		// resources that was allocated in the constructor
 		closesocket(_serverSocket);
 
-		for (auto it = _clientThreads.begin(); it != _clientThreads.end(); it++)
-		{
-			it->join();
-			
-		}
-		_messageThread.join();
 	}
 	catch (...) {}
 }
 
 void Server::serve(int port)
 {
-
+	std::cout << "Starting..." << std::endl;
 	struct sockaddr_in sa = { 0 };
 
 	sa.sin_port = htons(port); // port that server will listen for
@@ -49,20 +51,18 @@ void Server::serve(int port)
 	// Connects between the socket and the configuration (port and etc..)
 	if (bind(_serverSocket, (struct sockaddr*)&sa, sizeof(sa)) == SOCKET_ERROR)
 		throw std::exception(__FUNCTION__ " - bind");
+	std::cout << "binded" << std::endl;
 
 	// Start listening for incoming requests of clients
 	if (listen(_serverSocket, SOMAXCONN) == SOCKET_ERROR)
 		throw std::exception(__FUNCTION__ " - listen");
-
-	std::cout << "Starting...\n";
-	std::cout << "Binded\n";
-	std::cout << "Listening...\n";
+	std::cout << "Listening... " << std::endl;
 
 	while (true)
 	{
 		// the main thread is only accepting clients 
 		// and add then to the list of handlers
-		std::cout << "accepting client...\n" << std::endl;
+		std::cout << "accepting client..." << std::endl;
 		acceptClient();
 	}
 }
@@ -70,17 +70,18 @@ void Server::serve(int port)
 
 void Server::acceptClient()
 {
+
 	// this accepts the client and create a specific socket from server to this client
 	// the process will not continue until a client connects to the server
 	SOCKET client_socket = accept(_serverSocket, NULL, NULL);
 	if (client_socket == INVALID_SOCKET)
 		throw std::exception(__FUNCTION__);
 
-	std::cout << "Client accepted !" << std::endl; // Print after accept()
+	std::cout << "Client accepted !" << std::endl;
 
-	//new thread for new client
-	std::thread clientThread(&Server::clientHandler, this, client_socket);
-	_clientThreads.push_back(std::move(clientThread)); // Store the thread
+	//thread for every client
+	std::thread(&Server::clientHandler, this, client_socket).detach();
+
 }
 
 
@@ -88,70 +89,22 @@ void Server::clientHandler(SOCKET clientSocket)
 {
 	try
 	{
-		std::string s = "Welcome! What is your name (4 bytes)? ";
-		send(clientSocket, s.c_str(), s.size(), 0);  // last parameter: flag. for us will be 0.
+		std::string username = Helper::getStringPartFromSocket(clientSocket, 3);
+		users[username] = clientSocket;
 
-		char m[5];
-		recv(clientSocket, m, 4, 0);
-		m[4] = 0;
-
-		int clientID = static_cast<int>(clientSocket); // Use socket as ID
-		_clients[clientID] = std::string(m);
-
-		std::cout << "ADDED new client " << clientID << ", " << m << " to clients list" << std::endl;
+		int messageCode = Helper::getMessageTypeCode(clientSocket);
+		if (messageCode == 0)
 		{
-			std::lock_guard<std::mutex> lock(_clientsMutex);
-			_clients[clientSocket] = m;
+			std::cerr << "Client disconnected!" << std::endl;
+			closesocket(clientSocket);
+			return;
 		}
-		while (true)
-		{
-			int messageType = Helper::getMessageTypeCode(clientSocket);
-			//client disconnected
-			if (messageType == 0 || messageType == MT_CLIENT_EXIT)
-			{
-				std::cout << "Received exit message from client\n";
-				break;
-			}
-			std::string message = Helper::getStringPartFromSocket(clientSocket, 1024);
-			_messageQueue.push(m + ': ' + message);
-		}
-
-		//closing socket for client
+		// Closing the socket (in the level of the TCP protocol)
 		closesocket(clientSocket);
-		{
-			std::lock_guard<std::mutex> lock(_clientsMutex);
-			std::cout << "REMOVED " << clientSocket << ", " << _clients[clientSocket] << " from clients list\n";
-			_clients.erase(clientSocket);
-		}
 	}
 	catch (const std::exception& e)
 	{
-		std::cerr << "Exception was caught in function clientHandler. socket=" << clientSocket
-			<< ", what=" << e.what() << std::endl;
+		std::cerr << "Exception was catch in function clientHandler. socket= " << clientSocket << ", what=" << e.what() << "\nRecieved exit message from client" << std::endl;
 		closesocket(clientSocket);
-	}
-
-
-}
-
-void Server::messageProcessor()
-{
-	while (true)
-	{
-		std::string message = _messageQueue.pop();
-		std::cout << "Processing message: " << message << std::endl;
-
-		std::lock_guard<std::mutex> lock(_clientsMutex);
-		for (auto it = _clients.begin(); it != _clients.end(); it++)
-		{
-			try
-			{
-				Helper::sendData(it->first, message);
-			}
-			catch (...)
-			{
-				std::cerr << "Failed to send message to client." << std::endl;
-			}
-		}
 	}
 }
