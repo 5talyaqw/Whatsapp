@@ -68,6 +68,8 @@ void Server::serve(int port)
 }
 
 
+
+
 void Server::acceptClient()
 {
 
@@ -81,7 +83,7 @@ void Server::acceptClient()
 
 	//thread for every client
 	std::thread(&Server::clientHandler, this, client_socket).detach();
-
+	
 }
 
 
@@ -89,22 +91,68 @@ void Server::clientHandler(SOCKET clientSocket)
 {
 	try
 	{
-		std::string username = Helper::getStringPartFromSocket(clientSocket, 3);
-		users[username] = clientSocket;
 
 		int messageCode = Helper::getMessageTypeCode(clientSocket);
-		if (messageCode == 0)
+
+		if (messageCode == MT_CLIENT_LOG_IN)
 		{
-			std::cerr << "Client disconnected!" << std::endl;
-			closesocket(clientSocket);
-			return;
+			//getting the len of the user 
+			int usernameLen = Helper::getIntPartFromSocket(clientSocket, 2);
+			//getting the username based on the len
+			std::string username = Helper::getStringPartFromSocket(clientSocket, usernameLen);
+
+			//storing the username and user socket to the map
+			users[username] = clientSocket;
+			std::cout << "ADDED new Client " << clientSocket << ", " << username << " to clients list" << std::endl;
+			
+			//sending server update
+			std::string allUsers;
+			for (auto it = users.begin(); it != users.end(); it++)
+			{
+				if (!allUsers.empty())
+				{
+					allUsers += "&";
+				}
+				allUsers += it->first;
+			}
+			//getting the len for thr format
+			std::string fileSize = Helper::getPaddedNumber(0, 5);
+			std::string secondUserSize = Helper::getPaddedNumber(0, 2);
+			std::string allUserSize = Helper::getPaddedNumber(allUsers.size(), 5);
+			std::string response = std::to_string(MT_SERVER_UPDATE) + fileSize + secondUserSize + allUserSize + allUsers;
+
+			Helper::sendData()
 		}
-		// Closing the socket (in the level of the TCP protocol)
-		closesocket(clientSocket);
+
+		while (true)
+		{
+			messageCode = Helper::getMessageTypeCode(clientSocket);
+
+			//if client exiting
+			if (messageCode == 0 || messageCode == MT_CLIENT_EXIT)
+			{
+				break;
+			}
+		}
 	}
 	catch (const std::exception& e)
 	{
-		std::cerr << "Exception was catch in function clientHandler. socket= " << clientSocket << ", what=" << e.what() << "\nRecieved exit message from client" << std::endl;
+		std::cerr << "Exception was catch in function clientHandler. socket="
+			<< clientSocket << ", what=" << e.what() << std::endl;
+		std::cerr << "Recieved exit message from client" << std::endl;
+
+		for (auto it = users.begin(); it != users.end(); it++)
+		{
+			if (it->second == clientSocket)
+			{
+				std::cout << "REMOVED " << clientSocket << ", " << it->first << " from clients list" << std::endl;
+				users.erase(it);
+				break;
+			}
+		}
+
+		//closing client socket
 		closesocket(clientSocket);
 	}
+	
 }

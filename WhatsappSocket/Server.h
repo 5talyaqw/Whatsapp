@@ -2,7 +2,7 @@
 
 #include <WinSock2.h>
 #include <Windows.h>
-#include <unordered_map>
+#include <map>
 #include "Helper.h"
 
 
@@ -18,6 +18,6 @@ private:
 
 	void acceptClient();
 	void clientHandler(SOCKET clientSocket);
-	std::unordered_map<std::string, int> users;
+	std::map <std::string, int> users;
 	SOCKET _serverSocket;
 };
