@@ -6,6 +6,8 @@
 #include <queue>
 #include <condition_variable>
 #include <mutex>
+#include <fstream>
+#include <algorithm>
 
 
 
@@ -13,6 +15,7 @@
 std::queue<std::string> messageQueue;
 std::mutex queueMutex;
 std::condition_variable queueCV;
+std::mutex usersMutex;
 
 
 
@@ -58,6 +61,8 @@ void Server::serve(int port)
 		throw std::exception(__FUNCTION__ " - listen");
 	std::cout << "Listening... " << std::endl;
 
+	std::thread(&Server::messageProcessor, this).detach();
+
 	while (true)
 	{
 		// the main thread is only accepting clients 
@@ -67,8 +72,27 @@ void Server::serve(int port)
 	}
 }
 
+void Server::messageProcessor()
+{
+	while (true)
+	{
+		std::unique_lock<std::mutex> lock(queueMutex);
+		queueCV.wait(lock, [] { return !messageQueue.empty(); });
 
+		std::string message = messageQueue.front();
+		messageQueue.pop();
+		lock.unlock();  // Unlock the queue before processing
 
+		// Broadcasting to all clients
+		{
+			std::lock_guard<std::mutex> userLock(usersMutex);
+			for (auto it = users.begin(); it != users.end(); it++)
+			{
+				Helper::sendData(it->second, message);
+			}
+		}
+	}
+}
 
 void Server::acceptClient()
 {
@@ -91,56 +115,78 @@ void Server::clientHandler(SOCKET clientSocket)
 {
 	try
 	{
-
-		int messageCode = Helper::getMessageTypeCode(clientSocket);
-
-		if (messageCode == MT_CLIENT_LOG_IN)
-		{
-			//getting the len of the user 
-			int usernameLen = Helper::getIntPartFromSocket(clientSocket, 2);
-			//getting the username based on the len
-			std::string username = Helper::getStringPartFromSocket(clientSocket, usernameLen);
-
-			//storing the username and user socket to the map
-			users[username] = clientSocket;
-			std::cout << "ADDED new Client " << clientSocket << ", " << username << " to clients list" << std::endl;
-			
-			//sending server update
-			std::string allUsers;
-			for (auto it = users.begin(); it != users.end(); it++)
+		int messageCode;
+		while(true)
+		{ 
+			messageCode = Helper::getMessageTypeCode(clientSocket);
+			if (messageCode == MT_CLIENT_LOG_IN)
 			{
-				if (!allUsers.empty())
+				int userLen = Helper::getIntPartFromSocket(clientSocket, 2);
+				std::string username = Helper::getStringPartFromSocket(clientSocket, userLen);
+
+				// Adding user to the users map
+				std::lock_guard<std::mutex> lock(usersMutex);
+				users[username] = clientSocket;
+
+				std::cout << "ADDED new client " << clientSocket << ", " << username << " to the clients list" << std::endl;
+
+				//sending all of the users as serverUpdatePacket
+				std::string allUsers;
+				for (auto it = users.begin(); it != users.end(); it++)
 				{
-					allUsers += "&";
+					if (!allUsers.empty())
+					{
+						allUsers += '&';
+					}
+					allUsers += it->first;
 				}
-				allUsers += it->first;
+				std::string messageC = "101";
+				std::string Len_chat_content = "00000";
+				std::string Chat_content = "";
+				std::string Len_per_user_name = "00";
+				std::string Par_user_name = "";
+				std::string Len_all_usernames = Helper::getPaddedNumber(allUsers.size(), 5);
+
+				std::string packet = messageC + Len_chat_content + Chat_content + Len_per_user_name + Par_user_name + Len_all_usernames + allUsers;
+
+				//sending to all of the connected users
+				for (auto it = users.begin(); it != users.end(); it++)
+				{
+					Helper::sendData(it->second, packet);
+				}
 			}
-			//getting the len for thr format
-			std::string fileSize = Helper::getPaddedNumber(0, 5);
-			std::string secondUserSize = Helper::getPaddedNumber(0, 2);
-			std::string allUserSize = Helper::getPaddedNumber(allUsers.size(), 5);
-			std::string response = std::to_string(MT_SERVER_UPDATE) + fileSize + secondUserSize + allUserSize + allUsers;
-
-			Helper::sendData()
 		}
-
 		while (true)
 		{
 			messageCode = Helper::getMessageTypeCode(clientSocket);
+			if (messageCode == MT_CLIENT_UPDATE)
+			{
 
-			//if client exiting
-			if (messageCode == 0 || messageCode == MT_CLIENT_EXIT)
+			}
+		}
+		while (true)
+		{
+			messageCode = Helper::getMessageTypeCode(clientSocket);
+			if (messageCode == MT_CLIENT_EXIT)
 			{
 				break;
 			}
+
+			int messageLength = Helper::getIntPartFromSocket(clientSocket, 2);
+			std::string message = Helper::getStringPartFromSocket(clientSocket, messageLength);
+
+			//pushing the messages into the queue
+			std::lock_guard<std::mutex> lock(queueMutex);
+			messageQueue.push(message);
+
+			queueCV.notify_one(); //notify the thread that handles the messages
 		}
 	}
 	catch (const std::exception& e)
 	{
-		std::cerr << "Exception was catch in function clientHandler. socket="
-			<< clientSocket << ", what=" << e.what() << std::endl;
-		std::cerr << "Recieved exit message from client" << std::endl;
-
+		std::cerr << "Exception was catch in function clientHandler. socket=" << clientSocket << ", what=" << e.what() << std::endl;
+		
+		std::lock_guard<std::mutex> lock(usersMutex);
 		for (auto it = users.begin(); it != users.end(); it++)
 		{
 			if (it->second == clientSocket)
@@ -150,9 +196,6 @@ void Server::clientHandler(SOCKET clientSocket)
 				break;
 			}
 		}
-
-		//closing client socket
 		closesocket(clientSocket);
 	}
-	
 }

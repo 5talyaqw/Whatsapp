@@ -15,7 +15,7 @@ public:
 	void serve(int port);
 
 private:
-
+	void messageProcessor();
 	void acceptClient();
 	void clientHandler(SOCKET clientSocket);
 	std::map <std::string, int> users;
