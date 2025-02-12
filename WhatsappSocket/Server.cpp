@@ -82,15 +82,7 @@ void Server::messageProcessor()
 		std::string message = messageQueue.front();
 		messageQueue.pop();
 		lock.unlock();  // Unlock the queue before processing
-
-		// Broadcasting to all clients
-		{
-			std::lock_guard<std::mutex> userLock(usersMutex);
-			for (auto it = users.begin(); it != users.end(); it++)
-			{
-				Helper::sendData(it->second, message);
-			}
-		}
+		
 	}
 }
 
@@ -115,6 +107,8 @@ void Server::clientHandler(SOCKET clientSocket)
 {
 	try
 	{
+		std::string allUsers;
+		std::string username;
 		int messageCode;
 		while(true)
 		{ 
@@ -122,7 +116,7 @@ void Server::clientHandler(SOCKET clientSocket)
 			if (messageCode == MT_CLIENT_LOG_IN)
 			{
 				int userLen = Helper::getIntPartFromSocket(clientSocket, 2);
-				std::string username = Helper::getStringPartFromSocket(clientSocket, userLen);
+				username = Helper::getStringPartFromSocket(clientSocket, userLen);
 
 				// Adding user to the users map
 				std::lock_guard<std::mutex> lock(usersMutex);
@@ -131,7 +125,7 @@ void Server::clientHandler(SOCKET clientSocket)
 				std::cout << "ADDED new client " << clientSocket << ", " << username << " to the clients list" << std::endl;
 
 				//sending all of the users as serverUpdatePacket
-				std::string allUsers;
+				
 				for (auto it = users.begin(); it != users.end(); it++)
 				{
 					if (!allUsers.empty())
@@ -140,46 +134,37 @@ void Server::clientHandler(SOCKET clientSocket)
 					}
 					allUsers += it->first;
 				}
-				std::string messageC = "101";
-				std::string Len_chat_content = "00000";
-				std::string Chat_content = "";
-				std::string Len_per_user_name = "00";
-				std::string Par_user_name = "";
-				std::string Len_all_usernames = Helper::getPaddedNumber(allUsers.size(), 5);
-
-				std::string packet = messageC + Len_chat_content + Chat_content + Len_per_user_name + Par_user_name + Len_all_usernames + allUsers;
-
+				
 				//sending to all of the connected users
 				for (auto it = users.begin(); it != users.end(); it++)
 				{
-					Helper::sendData(it->second, packet);
+					Helper::send_update_message_to_client(it->second, "", "00", allUsers);
 				}
 			}
-		}
-		while (true)
-		{
-			messageCode = Helper::getMessageTypeCode(clientSocket);
-			if (messageCode == MT_CLIENT_UPDATE)
-			{
-
-			}
-		}
-		while (true)
-		{
-			messageCode = Helper::getMessageTypeCode(clientSocket);
-			if (messageCode == MT_CLIENT_EXIT)
+			else if (messageCode == MT_CLIENT_EXIT)
 			{
 				break;
 			}
+			/*else if (messageCode == MT_CLIENT_UPDATE)
+			{
+				int messageLen = Helper::getIntPartFromSocket(clientSocket, 5);
+				std::string message = Helper::getStringPartFromSocket(clientSocket, messageLen);
 
-			int messageLength = Helper::getIntPartFromSocket(clientSocket, 2);
-			std::string message = Helper::getStringPartFromSocket(clientSocket, messageLength);
+				int secondUserLen = Helper::getIntPartFromSocket(clientSocket, 2);
+				std::string secondUser = Helper::getStringPartFromSocket(clientSocket, secondUserLen);
+				
 
-			//pushing the messages into the queue
-			std::lock_guard<std::mutex> lock(queueMutex);
-			messageQueue.push(message);
-
-			queueCV.notify_one(); //notify the thread that handles the messages
+				std::vector<std::string>usernames = { secondUser + username };
+				std::sort(usernames.begin(), usernames.end());
+				std::string path = "C:\\Users\\Cyber_User\\Desktop\\EkronotExercises\\Whatsapp\\" + usernames[0] + "&" + usernames[1] + ".txt";
+				
+				std::lock_guard<std::mutex> lock(queueMutex);
+				messageQueue.push(message);
+				queueCV.notify_one();
+				writeMessagesToUsersFile(path, username);
+				std::string content = readChatHistory(path);
+				Helper::send_update_message_to_client(clientSocket, content, secondUser, allUsers);
+			}*/
 		}
 	}
 	catch (const std::exception& e)
@@ -198,4 +183,51 @@ void Server::clientHandler(SOCKET clientSocket)
 		}
 		closesocket(clientSocket);
 	}
+}
+
+void Server::writeMessagesToUsersFile(std::string filePath, std::string user)
+{
+	std::lock_guard<std::mutex> lock(queueMutex);
+
+	// creating file in append mode
+	std::ofstream file(filePath, std::ios::app);
+	if (!file)
+	{
+		std::cerr << "Error: Unable to open file " << filePath << "\n";
+		return;
+	}
+
+	// Check if the queue has any messages to write
+	if (!messageQueue.empty())
+	{
+		std::string message = messageQueue.front();
+		messageQueue.pop();
+
+		// Write the formatted message to the file
+		file << "&MAGSH_MESSAGE&&Author&" << user << "&DATA&" << message << std::endl;
+	}
+}
+std::string Server::readChatHistory(std::string filePath)
+{
+	std::string content;
+	std::ifstream file(filePath);
+
+	if (file.is_open())
+	{
+		std::string line;
+
+		// Read the file line by line and accumulate the content
+		while (std::getline(file, line))
+		{
+			content += line + "\n";  // Append each line with a newline character
+		}
+
+		file.close();  // Close the file after reading
+	}
+	else
+	{
+		std::cerr << "Error: Unable to open file " << filePath << "\n";
+	}
+
+	return content;  // Return the accumulated content
 }
