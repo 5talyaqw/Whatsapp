@@ -12,10 +12,10 @@
 
 
 //global variables
-std::queue<std::string> messageQueue;
-std::mutex queueMutex;
-std::condition_variable queueCV;
-std::mutex usersMutex;
+std::queue<std::string> messageQueue; //global queue for all messages
+std::mutex queueMutex; //mutex for the queue
+std::condition_variable queueCV; //condition variable for messages queue
+std::mutex usersMutex; //mutex for users
 
 
 
@@ -61,6 +61,7 @@ void Server::serve(int port)
 		throw std::exception(__FUNCTION__ " - listen");
 	std::cout << "Listening... " << std::endl;
 
+	//main messages thread
 	std::thread(&Server::messageProcessor, this).detach();
 
 	while (true)
@@ -72,6 +73,7 @@ void Server::serve(int port)
 	}
 }
 
+//function for deleting the messages off the qqueue
 void Server::messageProcessor()
 {
 	while (true)
@@ -108,21 +110,26 @@ void Server::clientHandler(SOCKET clientSocket)
 		std::string username;
 		int messageCode;
 		while(true)
-		{ 
+		{
+			//getting the message code for different conditons(200, 204, 208)
 			messageCode = Helper::getMessageTypeCode(clientSocket);
+			
+			//if client asking for log in request(200)
 			if (messageCode == MT_CLIENT_LOG_IN)
 			{
-				int userLen = Helper::getIntPartFromSocket(clientSocket, 2);
+				int userLen;
+
+				userLen = Helper::getIntPartFromSocket(clientSocket, 2);
 				username = Helper::getStringPartFromSocket(clientSocket, userLen);
 
 				// Adding user to the users map
-				std::lock_guard<std::mutex> lock(usersMutex);
+				std::lock_guard<std::mutex> lock(usersMutex); //shared object so locking
 				users[username] = clientSocket;
 
 				std::cout << "ADDED new client " << clientSocket << ", " << username << " to the clients list" << std::endl;
 
 				//sending all of the users as serverUpdatePacket
-				
+				allUsers.clear();
 				for (auto it = users.begin(); it != users.end(); it++)
 				{
 					if (!allUsers.empty())
@@ -142,10 +149,12 @@ void Server::clientHandler(SOCKET clientSocket)
 			{
 				int secondUserLen = Helper::getIntPartFromSocket(clientSocket, 2);
 				std::string secondUser = Helper::getStringPartFromSocket(clientSocket, secondUserLen);
+				
+				//if its update request
 				if (secondUser.empty())
 				{
 					std::lock_guard<std::mutex> lock(usersMutex);
-					allUsers.clear();
+					allUsers.clear(); //clearing the list
 					for (auto it = users.begin(); it != users.end(); it++)
 					{
 						if (!allUsers.empty())
@@ -154,28 +163,34 @@ void Server::clientHandler(SOCKET clientSocket)
 						}
 						allUsers += it->first;
 					}
-					Helper::send_update_message_to_client(clientSocket, "", "", allUsers);
+					Helper::send_update_message_to_client(clientSocket, "", "", allUsers); //sending an update for the client
 				}
+
+				//else the client asks to send message
 				else
 				{
 					int messageLen = Helper::getIntPartFromSocket(clientSocket, 5);
-					std::string message = Helper::getStringPartFromSocket(clientSocket, messageLen);
+					std::string message = Helper::getStringPartFromSocket(clientSocket, messageLen); //getting the message
 					if (!message.empty())
 					{
 						std::string formattedMessage = "&MAGSH_MESSAGE&&Author&" + username + "&DATA&" + message;
 						writeChatToFile(formattedMessage, username, secondUser);
+						
 						std::lock_guard<std::mutex> lock(queueMutex);
-						messageQueue.push(formattedMessage);
-						queueCV.notify_one();
-						std::string content = readChatHistory(username, secondUser);
+						messageQueue.push(formattedMessage); //pushing the message
+						queueCV.notify_one(); //notifying the queue there is message
+						
+						std::string content = readChatHistory(username, secondUser); //getting the chat content
+						
 						Helper::send_update_message_to_client(clientSocket, content, secondUser, allUsers); //sending update to the client
 						Helper::send_update_message_to_client(users[secondUser], content, username, allUsers); //sending update to the second user too
 					}
 				}
 			}
+			//if client want to exit
 			else if (messageCode == MT_CLIENT_EXIT)
 			{
-				break;
+				break; //breaking the loop
 			}
 		}
 	}
@@ -183,6 +198,7 @@ void Server::clientHandler(SOCKET clientSocket)
 	{
 		std::cerr << "Exception was catch in function clientHandler. socket=" << clientSocket << ", what=" << e.what() << std::endl;
 		
+		//removing the user off the map
 		std::lock_guard<std::mutex> lock(usersMutex);
 		for (auto it = users.begin(); it != users.end(); it++)
 		{
@@ -193,20 +209,27 @@ void Server::clientHandler(SOCKET clientSocket)
 				break;
 			}
 		}
-		closesocket(clientSocket);
+		closesocket(clientSocket); //closing socket
 	}
 }
 
+/*
+*function writing to file and creating one, adding the messages
+* output: nothing
+* input: s - sender(client that sends the message), r - reciver(client that gets it), message - the formatted message
+*/
 void Server::writeChatToFile(std::string message, std::string s, std::string r)
 {
-	std::array<std::string, 2>sortedUsers = { s, r };
+	//getting the filePath/name by sorting the names
+	std::array<std::string, 2>sortedUsers = { s, r }; 
 	std::sort(sortedUsers.begin(), sortedUsers.end());
 	std::string filePath = "C:\\Users\\Cyber_User\\Desktop\\EkronotExercises\\Whatsapp\\" + sortedUsers[0] + "&" + sortedUsers[1] + ".txt";
 
+	//creating and opening a file in append mode
 	std::ofstream file(filePath, std::ios::app);
 	if (file.is_open())
 	{
-		file << message << std::endl;
+		file << message << std::endl; //ssetting the formatted message in
 	}
 	else
 	{
@@ -214,12 +237,19 @@ void Server::writeChatToFile(std::string message, std::string s, std::string r)
 	}
 }
 
+/*
+*function reading from file and getting the content of it
+* output: chat history/file content
+* input: s - sender(client that sends the message), r - reciver(client that gets it)
+*/
 std::string Server::readChatHistory(std::string s, std::string r)
 {
+	//getting the filePath/name by sorting the names
 	std::array<std::string, 2>sortedUsers = { s, r };
 	std::sort(sortedUsers.begin(), sortedUsers.end());
 	std::string filePath = "C:\\Users\\Cyber_User\\Desktop\\EkronotExercises\\Whatsapp\\" + sortedUsers[0] + "&" + sortedUsers[1] + ".txt";
 
+	//opening the file for reading
 	std::ifstream file(filePath);
 	if (!file)
 	{
@@ -230,5 +260,5 @@ std::string Server::readChatHistory(std::string s, std::string r)
 	//read file contents
 	std::string history((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 	file.close();
-	return history;
+	return history; //returning the content
 }
